@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>오늘 뭐 먹지? 점심 룰렛</title>
+<style>
+:root{--board:#123c36;--panel:#1a4a43;--chalk:#f6f1e1;--yellow:#f6c945;--coral:#ef6f5e;--line:rgba(246,241,225,.22);--muted:rgba(246,241,225,.7)}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:var(--board);color:var(--chalk);font-family:-apple-system,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif;display:flex;justify-content:center;padding:24px 16px 40px}
+main{width:100%;max-width:440px}
+h1{text-align:center;font-size:2rem;font-weight:800;margin:4px 0 6px;letter-spacing:-.02em}
+.sub{text-align:center;color:var(--muted);margin:0 0 22px}
+.wheel-wrap{position:relative;width:100%;max-width:340px;margin:0 auto}
+canvas{width:100%;height:auto;display:block}
+.pointer{position:absolute;top:-8px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:13px solid transparent;border-right:13px solid transparent;border-top:26px solid var(--coral);z-index:2}
+button{font:inherit;cursor:pointer;border:0;border-radius:12px}
+button:focus-visible,input:focus-visible{outline:3px solid var(--yellow);outline-offset:2px}
+#spin{display:block;width:100%;margin-top:22px;padding:15px;background:var(--yellow);color:var(--board);font-size:1.15rem;font-weight:800}
+#spin:disabled{opacity:.5;cursor:not-allowed}
+#result{text-align:center;font-size:1.35rem;font-weight:800;min-height:2.2em;margin:14px 0 18px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px}
+.panel h2{font-size:1rem;margin:0 0 12px}
+form{display:flex;gap:8px}
+input{flex:1;min-width:0;font:inherit;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--board);color:var(--chalk)}
+input::placeholder{color:var(--muted)}
+form button{padding:11px 16px;background:var(--chalk);color:var(--board);font-weight:700}
+ul{list-style:none;padding:0;margin:14px 0 0;display:flex;flex-wrap:wrap;gap:8px}
+li{display:flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:999px;padding:5px 6px 5px 13px}
+li button{background:none;color:var(--muted);padding:2px 8px;font-size:1.15rem;line-height:1}
+li button:hover{color:var(--coral)}
+.hint{color:var(--yellow);font-size:.88rem;margin:10px 0 0;min-height:1.2em}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<main>
+  <h1>오늘 뭐 먹지?</h1>
+  <p class="sub">메뉴를 넣고 돌려서 점심을 정하세요.</p>
+
+  <div class="wheel-wrap">
+    <div class="pointer"></div>
+    <canvas id="wheel" aria-label="메뉴 룰렛"></canvas>
+  </div>
+  <button id="spin">돌리기</button>
+  <div id="result" aria-live="polite"></div>
+
+  <section class="panel">
+    <h2>메뉴 목록</h2>
+    <form id="f">
+      <input id="m" type="text" maxlength="20" placeholder="메뉴 이름 입력" autocomplete="off">
+      <button type="submit">추가</button>
+    </form>
+    <ul id="list"></ul>
+    <p class="hint" id="hint"></p>
+  </section>
+</main>
+
+<script>
+const KEY = 'lunch-roulette-menus';
+const COLORS = ['#f6c945', '#ef6f5e', '#7fd1ae', '#6bb7e8', '#f2a7c3', '#f6f1e1'];
+let menus = ['김치찌개', '돈까스', '비빔밥', '짜장면', '햄버거', '샐러드'];
+try {
+  const saved = JSON.parse(localStorage.getItem(KEY));
+  if (Array.isArray(saved) && saved.length) menus = saved;
+} catch (e) {}
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(menus)); } catch (e) {} };
+
+const cv = document.getElementById('wheel');
+const ctx = cv.getContext('2d');
+const S = 680;
+cv.width = cv.height = S;
+let rot = 0, spinning = false;
+
+function draw() {
+  ctx.clearRect(0, 0, S, S);
+  const n = menus.length;
+  if (!n) return;
+  const arc = 2 * Math.PI / n, c = S / 2, r = c - 6;
+  ctx.font = 'bold 30px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  menus.forEach((m, i) => {
+    const a = rot + i * arc;
+    let ci = i % COLORS.length;
+    if (i === n - 1 && n % COLORS.length === 1) ci = 2;
+    ctx.beginPath();
+    ctx.moveTo(c, c);
+    ctx.arc(c, c, r, a, a + arc);
+    ctx.closePath();
+    ctx.fillStyle = COLORS[ci];
+    ctx.fill();
+    ctx.strokeStyle = '#123c36';
+    ctx.lineWidth = 4;
+    ctx.stroke();
+    ctx.save();
+    ctx.translate(c, c);
+    ctx.rotate(a + arc / 2);
+    ctx.fillStyle = '#123c36';
+    ctx.fillText(m.length > 8 ? m.slice(0, 7) + '…' : m, r - 26, 0);
+    ctx.restore();
+  });
+  ctx.beginPath();
+  ctx.arc(c, c, 30, 0, Math.PI * 2);
+  ctx.fillStyle = '#123c36';
+  ctx.fill();
+}
+
+function render() {
+  const ul = document.getElementById('list');
+  ul.textContent = '';
+  menus.forEach((m, i) => {
+    const li = document.createElement('li');
+    const t = document.createElement('span');
+    t.textContent = m;
+    const b = document.createElement('button');
+    b.textContent = '×';
+    b.setAttribute('aria-label', m + ' 삭제');
+    b.onclick = () => {
+      if (spinning) return;
+      menus.splice(i, 1);
+      save();
+      render();
+    };
+    li.append(t, b);
+    ul.append(li);
+  });
+  document.getElementById('spin').disabled = spinning || menus.length < 2;
+  document.getElementById('hint').textContent = menus.length < 2 ? '메뉴를 2개 이상 넣어 주세요.' : '';
+  draw();
+}
+
+document.getElementById('f').onsubmit = e => {
+  e.preventDefault();
+  const inp = document.getElementById('m');
+  const v = inp.value.trim();
+  inp.value = '';
+  if (!v || spinning || menus.includes(v)) return;
+  if (menus.length >= 12) {
+    document.getElementById('hint').textContent = '메뉴는 최대 12개까지 넣을 수 있어요.';
+    return;
+  }
+  menus.push(v);
+  save();
+  render();
+};
+
+document.getElementById('spin').onclick = () => {
+  if (spinning || menus.length < 2) return;
+  spinning = true;
+  const res = document.getElementById('result');
+  res.textContent = '돌아가는 중...';
+  document.getElementById('spin').disabled = true;
+
+  const n = menus.length, arc = 2 * Math.PI / n, T = 2 * Math.PI;
+  const win = Math.floor(Math.random() * n);
+  const off = (Math.random() - 0.5) * arc * 0.7;
+  const fin = ((1.5 * Math.PI - (win + 0.5) * arc - off) % T + T) % T;
+  const start = rot % T;
+  const delta = ((fin - start) % T + T) % T + T * 5;
+  const t0 = performance.now(), D = 4000;
+
+  (function step(now) {
+    const p = Math.min((now - t0) / D, 1);
+    rot = start + delta * (1 - Math.pow(1 - p, 3));
+    draw();
+    if (p < 1) requestAnimationFrame(step);
+    else {
+      spinning = false;
+      res.textContent = '오늘 점심은 ' + menus[win] + '!';
+      render();
+    }
+  })(t0);
+};
+
+render();
+</script>
+</body>
+</html>
