@@ -21,6 +21,7 @@ h1{font-size:2rem;font-weight:800;margin:0 0 4px}
 .btn{width:100%;padding:13px;background:var(--ink);color:#fff;font-weight:700}
 .link{width:100%;padding:12px;background:none;color:var(--mute);text-decoration:underline}
 .err{color:#b3261e;min-height:1.4em;font-size:.9rem;margin:6px 0}
+.err.ok{color:#1b7a4b}
 #app{height:100vh;height:100dvh;display:grid;grid-template-columns:280px 1fr}
 aside{background:#fff;border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
 .top{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line)}
@@ -76,6 +77,7 @@ main{display:flex;flex-direction:column;min-height:0;min-width:0}
     <p class="err" id="authMsg" role="alert"></p>
     <button class="btn" id="authBtn" type="submit">로그인</button>
     <button class="link" id="toggle" type="button">처음이라면 가입하기</button>
+    <button class="link hide" id="resend" type="button">확인 메일 다시 받기</button>
   </form>
 </section>
 
@@ -109,6 +111,11 @@ main{display:flex;flex-direction:column;min-height:0;min-width:0}
 const SUPABASE_URL = 'https://iorgunigdmkseookjegc.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_A4pM2sB4eMqHnGOSmsV0zw_9TQgY_JU';
 // ====================================================================
+// 이메일 확인 링크로 돌아온 경우를 먼저 읽어 둬요 (Supabase가 주소의 정보를 지우기 전에)
+const hp = new URLSearchParams(location.hash.slice(1)), qp = new URLSearchParams(location.search);
+let confirming = hp.get('type') === 'signup' && !!hp.get('access_token');
+const linkError = hp.get('error_description') || qp.get('error_description');
+const BACK = location.protocol.startsWith('http') ? location.origin + location.pathname : undefined;
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const $ = id => document.getElementById(id);
 const COLORS = ['#F2735B', '#3CC9A0', '#5BB4F0', '#A35BD6', '#F0A53A', '#9BCB3F'];
@@ -145,26 +152,41 @@ function avatar(uid) {
 }
 
 /* ---------- 로그인 / 가입 ---------- */
-$('toggle').onclick = () => {
-  mode = mode === 'login' ? 'signup' : 'login';
+function notice(t, ok, resend) {
+  const m = $('authMsg');
+  m.textContent = t;
+  m.className = 'err' + (ok ? ' ok' : '');
+  $('resend').classList.toggle('hide', !resend);
+}
+function setMode(m) {
+  mode = m;
   const su = mode === 'signup';
   $('nick').classList.toggle('hide', !su);
   $('nick').required = su;
   $('authBtn').textContent = su ? '가입하기' : '로그인';
   $('toggle').textContent = su ? '이미 계정이 있어요' : '처음이라면 가입하기';
   $('pw').autocomplete = su ? 'new-password' : 'current-password';
-  $('authMsg').textContent = '';
-};
+  notice('');
+}
+$('toggle').onclick = () => setMode(mode === 'login' ? 'signup' : 'login');
 $('authForm').onsubmit = async e => {
   e.preventDefault();
   const msg = $('authMsg');
-  msg.textContent = '';
+  notice('');
   const email = $('email').value.trim(), password = $('pw').value, nick = $('nick').value.trim();
   let r;
   if (mode === 'signup') {
     if (!nick) { msg.textContent = '닉네임을 입력해 주세요.'; return; }
-    r = await sb.auth.signUp({ email, password, options: { data: { nickname: nick } } });
-    if (!r.error && !r.data.session) { msg.textContent = '확인 메일을 보냈어요. 메일의 링크를 누른 뒤 로그인해 주세요.'; return; }
+    r = await sb.auth.signUp({ email, password, options: { emailRedirectTo: BACK, data: { nickname: nick } } });
+    // 이미 가입된 이메일: 에러로 오거나, (이메일 확인이 켜져 있으면) identities가 빈 목록으로 와요
+    const dup = (r.error && (r.error.code === 'user_already_exists' || /already/i.test(r.error.message))) ||
+      (!r.error && r.data.user && r.data.user.identities && r.data.user.identities.length === 0);
+    if (dup) {
+      setMode('login');
+      $('authMsg').textContent = '이미 가입된 이메일이에요. 비밀번호를 입력해 로그인해 주세요.';
+      return;
+    }
+    if (!r.error && !r.data.session) { notice('확인 메일을 보냈어요. 메일의 링크를 누르면 로그인 화면으로 돌아와요.', true, true); return; }
   } else {
     r = await sb.auth.signInWithPassword({ email, password });
   }
@@ -174,12 +196,39 @@ $('logout').onclick = () => sb.auth.signOut();
 
 // 로그인 상태가 바뀔 때마다 실행 (페이지를 열 때도 한 번 실행돼요)
 sb.auth.onAuthStateChange((_ev, s) => {
+  if (confirming) {
+    // 확인 링크로 들어온 경우: 로그인 상태를 풀고 로그인 화면으로 보내요
+    if (confirming === true && s && s.user) {
+      confirming = 'out';
+      setTimeout(() => finishConfirm(s.user.email), 0);
+    }
+    return;
+  }
   if (s && s.user) {
     if (!me || me.id !== s.user.id) { me = s.user; setTimeout(start, 0); }
   } else {
     me = null; setTimeout(stop, 0);
   }
 });
+async function finishConfirm(email) {
+  await sb.auth.signOut();
+  confirming = false; me = null;
+  stop();
+  setMode('login');
+  $('email').value = email || '';
+  notice('이메일 확인이 완료됐어요. 비밀번호를 입력해 로그인해 주세요.', true);
+}
+const FAIL = '이메일 확인에 실패했어요. 링크가 만료됐거나 이미 사용됐을 수 있어요. 이메일을 입력하고 확인 메일을 다시 받아 주세요.';
+if (linkError) notice(FAIL, false, true);
+if (confirming) setTimeout(() => {   // 5초가 지나도 로그인 정보가 안 오면 실패로 봐요
+  if (confirming === true) { confirming = false; stop(); notice(FAIL, false, true); }
+}, 5000);
+$('resend').onclick = async () => {
+  const email = $('email').value.trim();
+  if (!email) return notice('위 이메일 칸에 가입한 이메일을 입력해 주세요.', false, true);
+  const { error } = await sb.auth.resend({ type: 'signup', email, options: { emailRedirectTo: BACK } });
+  notice(error ? '메일을 보내지 못했어요. 잠시 후 다시 시도해 주세요.' : '확인 메일을 다시 보냈어요. 메일의 링크를 눌러 주세요.', !error, true);
+};
 async function start() {
   $('auth').classList.add('hide');
   $('app').classList.remove('hide');
